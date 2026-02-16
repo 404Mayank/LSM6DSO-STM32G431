@@ -20,7 +20,6 @@ void YawEst_Init(YawEst_Handle_t *h, const YawEst_Config_t *cfg)
     /* Zero runtime state */
     h->yaw_deg          = 0.0f;
     h->gyro_z_bias_mdps = 0.0f;
-    h->prev_gz_corr     = 0.0f;
 
     /* Reset calibration */
     h->cal_sum       = 0.0;
@@ -73,29 +72,31 @@ uint8_t YawEst_GetCalProgress(const YawEst_Handle_t *h)
 
 /* ── Integration ───────────────────────────────────────────────────────── */
 
-void YawEst_Update(YawEst_Handle_t *h, float gyro_z_mdps, float dt_s)
+void YawEst_Update(YawEst_Handle_t *h, float gyro_z_mdps)
 {
-    /* Use provided dt, or fall back to configured default */
-    float dt = (dt_s > 0.0f) ? dt_s : h->dt_s;
-
     /* Subtract zero-rate bias */
     float gz_corr = gyro_z_mdps - h->gyro_z_bias_mdps;
 
-    /* Dead-zone: suppress quantization noise */
+    /* Dead-zone: suppress static drift */
     if (gz_corr > -h->deadzone_mdps && gz_corr < h->deadzone_mdps)
         gz_corr = 0.0f;
 
-    /* Trapezoidal integration: mdps → dps (×0.001) → degrees (× dt) → scale */
-    h->yaw_deg += 0.5f * (h->prev_gz_corr + gz_corr) * 0.001f * dt * h->scale_corr;
-    h->prev_gz_corr = gz_corr;
+    /* Integrate: mdps → dps (×0.001) → degrees (× dt) → scale correction */
+    h->yaw_deg += (gz_corr * 0.001f) * h->dt_s * h->scale_corr;
 
     /* Wrap according to configured mode */
     if (h->wrap_mode == YAWEST_WRAP_UNSIGNED) {
-        if (h->yaw_deg >= 360.0f)       h->yaw_deg -= 360.0f;
-        else if (h->yaw_deg < 0.0f)     h->yaw_deg += 360.0f;
+        /* [0, 360) */
+        if (h->yaw_deg >= 360.0f)
+            h->yaw_deg -= 360.0f;
+        else if (h->yaw_deg < 0.0f)
+            h->yaw_deg += 360.0f;
     } else {
-        if (h->yaw_deg > 180.0f)        h->yaw_deg -= 360.0f;
-        else if (h->yaw_deg <= -180.0f) h->yaw_deg += 360.0f;
+        /* (-180, +180] */
+        if (h->yaw_deg > 180.0f)
+            h->yaw_deg -= 360.0f;
+        else if (h->yaw_deg <= -180.0f)
+            h->yaw_deg += 360.0f;
     }
 }
 

@@ -136,7 +136,7 @@
  * IMU_GY_LPF1_AGGRESSIVE    |             |
  * IMU_GY_LPF1_XTREME        | narrowest   | ~most lag
  */
-#define IMU_DEFAULT_GY_LPF1_BW  IMU_GY_LPF1_MEDIUM
+#define IMU_DEFAULT_GY_LPF1_BW  IMU_GY_LPF1_STRONG
 
 /* ========================================================================= */
 /*  5.  DRIVER BEHAVIOUR                                                     */

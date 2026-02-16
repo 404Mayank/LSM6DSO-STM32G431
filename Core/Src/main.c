@@ -159,7 +159,8 @@ int main(void)
     // 1kHz sensor loop — ISR sets flag, main loop services it
     if (sensor_tick) {
       sensor_tick = 0;
-      IMU_UpdateFIFO(&imu, &yaw_est);
+      IMU_Update(&imu, NULL);
+      YawEst_Update(&yaw_est, imu.data.gyro_z_mdps);
     }
 
     // ~30Hz display loop
@@ -268,9 +269,6 @@ void SystemClock_Config(void)
       YawEst_CalState_t state = YAWEST_CAL_STABILIZING;
       uint32_t sample_count = 0;
 
-      /* Disable FIFO during calibration — data goes to output registers */
-      lsm6dso_fifo_mode_set(&imu.ctx, LSM6DSO_BYPASS_MODE);
-
       while (state != YAWEST_CAL_DONE) {
           /* Wait for the 1 kHz tick */
           while (!sensor_tick) { /* spin */ }
@@ -297,9 +295,6 @@ void SystemClock_Config(void)
               ssd1306_UpdateScreen();
           }
       }
-
-      /* Re-enable FIFO after calibration */
-      lsm6dso_fifo_mode_set(&imu.ctx, LSM6DSO_STREAM_MODE);
 
       float bias = YawEst_GetBias(&yaw_est);
       printf("[Cal] Bias = %.2f mdps\n", bias);

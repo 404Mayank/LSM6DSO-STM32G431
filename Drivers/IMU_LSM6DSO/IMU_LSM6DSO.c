@@ -1,5 +1,4 @@
 #include "IMU_LSM6DSO.h"
-#include "Yaw_Estimator.h"
 #include <string.h>
 
 /* ---- Private: SPI platform callbacks ------------------------------------ */
@@ -28,21 +27,16 @@ static int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp,
     IMU_Handle_t *h = (IMU_Handle_t *)handle;
     HAL_StatusTypeDef ret;
 
-    /* Build TX buffer: register address (bit 7 = 1 for read) + dummy bytes */
-    uint8_t tx[16];
-    memset(tx, 0, sizeof(tx));
-    tx[0] = reg | 0x80;
-    uint16_t total = 1 + len;     /* 1 addr byte + len data bytes */
-
-    uint8_t rx[16];
-    memset(rx, 0, sizeof(rx));
+    /* Bit 7 = 1 → read */
+    reg |= 0x80;
 
     HAL_GPIO_WritePin(h->cs_port, h->cs_pin, GPIO_PIN_RESET);
-    ret = HAL_SPI_TransmitReceive(h->hspi, tx, rx, total, IMU_SPI_TIMEOUT);
-    HAL_GPIO_WritePin(h->cs_port, h->cs_pin, GPIO_PIN_SET);
 
+    ret = HAL_SPI_Transmit(h->hspi, &reg, 1, IMU_SPI_TIMEOUT);
     if (ret == HAL_OK)
-        memcpy(bufp, &rx[1], len);   /* skip the first rx byte (received during addr TX) */
+        ret = HAL_SPI_Receive(h->hspi, bufp, len, IMU_SPI_TIMEOUT);
+
+    HAL_GPIO_WritePin(h->cs_port, h->cs_pin, GPIO_PIN_SET);
 
     return (ret == HAL_OK) ? 0 : -1;
 }
@@ -215,34 +209,6 @@ IMU_Status_t IMU_Init(IMU_Handle_t *h, const IMU_Config_t *cfg)
             return IMU_ERR_CFG;
     }
 
-    /* ---- Gyroscope high-pass filter ------------------------------------- */
-    if (cfg->gy_hpf > 0) {
-        /* Map config value to register enum:
-         * 1 → LSM6DSO_HP_FILTER_16mHz  (0x80)
-         * 2 → LSM6DSO_HP_FILTER_65mHz  (0x81)
-         * 3 → LSM6DSO_HP_FILTER_260mHz (0x82)
-         * 4 → LSM6DSO_HP_FILTER_1Hz04  (0x83)
-         */
-        static const lsm6dso_hpm_g_t hpf_map[] = {
-            LSM6DSO_HP_FILTER_NONE,     /* 0 = disabled */
-            LSM6DSO_HP_FILTER_16mHz,    /* 1 */
-            LSM6DSO_HP_FILTER_65mHz,    /* 2 */
-            LSM6DSO_HP_FILTER_260mHz,   /* 3 */
-            LSM6DSO_HP_FILTER_1Hz04,    /* 4 */
-        };
-        uint8_t idx = (cfg->gy_hpf <= 4) ? cfg->gy_hpf : 2; /* default 65mHz */
-        if (lsm6dso_gy_hp_path_internal_set(&h->ctx, hpf_map[idx]) != 0)
-            return IMU_ERR_CFG;
-    }
-
-    /* ---- FIFO: stream mode, gyro batched at ODR, no accel batching ------- */
-    if (lsm6dso_fifo_gy_batch_set(&h->ctx, LSM6DSO_GY_BATCHED_AT_1667Hz) != 0)
-        return IMU_ERR_CFG;
-    if (lsm6dso_fifo_xl_batch_set(&h->ctx, LSM6DSO_XL_NOT_BATCHED) != 0)
-        return IMU_ERR_CFG;
-    if (lsm6dso_fifo_mode_set(&h->ctx, LSM6DSO_STREAM_MODE) != 0)
-        return IMU_ERR_CFG;
-
     h->initialized = 1;
     return IMU_OK;
 }
@@ -330,66 +296,4 @@ IMU_Status_t IMU_Wake(IMU_Handle_t *h)
         return IMU_ERR_BUS;
 
     return IMU_OK;
-}
-
-/* ---- FIFO-based burst read + yaw integration ---------------------------- */
-
-int32_t IMU_UpdateFIFO(IMU_Handle_t *h, YawEst_Handle_t *yaw)
-{
-    if (!h->initialized)
-        return (int32_t)IMU_ERR_CFG;
-
-    /* How many FIFO words are queued? */
-    uint16_t fifo_level = 0;
-    if (lsm6dso_fifo_data_level_get(&h->ctx, &fifo_level) != 0)
-        return (int32_t)IMU_ERR_BUS;
-
-    if (fifo_level == 0)
-        return 0;
-
-    int32_t gy_count = 0;
-    const float dt = YAWEST_DEF_DT_S;   /* 1/1667 Hz = 0.0006002 s */
-
-    for (uint16_t i = 0; i < fifo_level; i++) {
-        /* Read tag byte */
-        lsm6dso_fifo_tag_t tag;
-        if (lsm6dso_fifo_sensor_tag_get(&h->ctx, &tag) != 0)
-            return (int32_t)IMU_ERR_BUS;
-
-        /* Read 6 data bytes (X_L, X_H, Y_L, Y_H, Z_L, Z_H) */
-        uint8_t raw_buf[6];
-        if (lsm6dso_fifo_out_raw_get(&h->ctx, raw_buf) != 0)
-            return (int32_t)IMU_ERR_BUS;
-
-        if (tag == LSM6DSO_GYRO_NC_TAG) {
-            int16_t raw[3];
-            raw[0] = (int16_t)((uint16_t)raw_buf[1] << 8 | raw_buf[0]);
-            raw[1] = (int16_t)((uint16_t)raw_buf[3] << 8 | raw_buf[2]);
-            raw[2] = (int16_t)((uint16_t)raw_buf[5] << 8 | raw_buf[4]);
-
-            h->data.gyro_x_mdps = gy_convert(h->gy_fs, raw[0]);
-            h->data.gyro_y_mdps = gy_convert(h->gy_fs, raw[1]);
-            h->data.gyro_z_mdps = gy_convert(h->gy_fs, raw[2]);
-
-            /* Integrate yaw if estimator is provided */
-            if (yaw != NULL)
-                YawEst_Update(yaw, h->data.gyro_z_mdps, dt);
-
-            gy_count++;
-        }
-        /* If accel were batched, handle LSM6DSO_XL_NC_TAG here */
-    }
-
-    /* Also read accel from output registers (not FIFO) for PID/display use */
-    lsm6dso_status_reg_t status;
-    if (lsm6dso_status_reg_get(&h->ctx, &status) == 0 && status.xlda) {
-        int16_t raw[3] = {0};
-        if (lsm6dso_acceleration_raw_get(&h->ctx, raw) == 0) {
-            h->data.accel_x_mg = xl_convert(h->xl_fs, raw[0]);
-            h->data.accel_y_mg = xl_convert(h->xl_fs, raw[1]);
-            h->data.accel_z_mg = xl_convert(h->xl_fs, raw[2]);
-        }
-    }
-
-    return gy_count;
 }
