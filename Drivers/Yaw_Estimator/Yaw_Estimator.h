@@ -20,16 +20,16 @@ extern "C" {
 /* ── Configuration defaults ────────────────────────────────────────────── */
 
 /** Dead-zone threshold [mdps]. Readings below this are zeroed to suppress drift. */
-#define YAWEST_DEF_DEADZONE_MDPS    211.0f
+#define YAWEST_DEF_DEADZONE_MDPS    30.0f
 
 /**
  * Empirical scale correction factor.
- * Derived from a 360° rotation test: (360 + 9.394) / 360 = 1.02609
+ * Set to 1.0 after config changes — recalibrate with a 360° rotation test.
  */
-#define YAWEST_DEF_SCALE_CORR       1.02609f
+#define YAWEST_DEF_SCALE_CORR       1.0f
 
-/** Integration time step [s]. Must match the sensor tick rate (1 kHz → 0.001 s). */
-#define YAWEST_DEF_DT_S             0.001f
+/** Integration time step [s]. Must match the gyro ODR (1667 Hz → 1/1667 s). */
+#define YAWEST_DEF_DT_S             0.0006002f   /* 1/1667 Hz */
 
 /** Number of warm-up samples to discard before averaging (sensor settling). */
 #define YAWEST_DEF_CAL_STABILIZE    500U
@@ -85,6 +85,7 @@ typedef struct {
     /* Integration state */
     float    yaw_deg;           /**< Current yaw angle [degrees]         */
     float    gyro_z_bias_mdps;  /**< Computed zero-rate offset [mdps]    */
+    float    prev_gz_corr;      /**< Previous corrected rate for trapezoidal integration */
 
     /* Calibration internals */
     double   cal_sum;           /**< Running sum of gyro-Z samples       */
@@ -128,8 +129,9 @@ void YawEst_CalibrateReset(YawEst_Handle_t *h);
  *
  * @param  h            Pointer to handle.
  * @param  gyro_z_mdps  Raw gyro-Z reading [mdps].
+ * @param  dt_s         Time step [s]. If <= 0, uses h->dt_s as fallback.
  */
-void YawEst_Update(YawEst_Handle_t *h, float gyro_z_mdps);
+void YawEst_Update(YawEst_Handle_t *h, float gyro_z_mdps, float dt_s);
 
 /**
  * @brief  Get current yaw angle in degrees.

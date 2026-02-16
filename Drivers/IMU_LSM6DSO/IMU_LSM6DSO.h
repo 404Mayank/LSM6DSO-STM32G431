@@ -8,6 +8,7 @@ extern "C" {
 #include <stdint.h>
 #include "lsm6dso_reg.h"
 #include "stm32g4xx_hal.h"
+#include "Yaw_Estimator.h"
 
 /* ---------- Status codes ------------------------------------------------- */
 typedef enum {
@@ -102,6 +103,7 @@ typedef struct {
     uint8_t            xl_lpf2_en;    /* Enable XL second low-pass filter  */
     uint8_t            gy_lpf1_en;    /* Enable GY LPF1                    */
     IMU_GY_LPF1_BW_t  gy_lpf1_bw;    /* GY LPF1 bandwidth                 */
+    uint8_t            gy_hpf;        /* Gyro HPF: 0=off, 1=16mHz, 2=65mHz, 3=260mHz, 4=1.04Hz */
     uint8_t            read_temp;     /* Read temperature on every update   */
 } IMU_Config_t;
 
@@ -127,6 +129,7 @@ typedef struct {
     .xl_lpf2_en = IMU_XL_LPF2_ENABLE,              \
     .gy_lpf1_en = IMU_GY_LPF1_ENABLE,              \
     .gy_lpf1_bw = IMU_DEFAULT_GY_LPF1_BW,          \
+    .gy_hpf     = 2,                                \
     .read_temp  = IMU_READ_TEMPERATURE,             \
 }
 
@@ -191,6 +194,15 @@ IMU_Status_t IMU_Sleep(IMU_Handle_t *h);
  * @brief  Re-enable both sensors at previously configured ODR.
  */
 IMU_Status_t IMU_Wake(IMU_Handle_t *h);
+
+/**
+ * @brief  Drain the FIFO, integrate each gyro sample into the yaw estimator,
+ *         and store the latest accel/gyro readings in h->data.
+ * @param  h      Initialised IMU handle
+ * @param  yaw    Pointer to yaw estimator handle (may be NULL to skip integration)
+ * @retval Number of gyro samples processed, or negative IMU_Status_t on error.
+ */
+int32_t IMU_UpdateFIFO(IMU_Handle_t *h, YawEst_Handle_t *yaw);
 
 #ifdef __cplusplus
 }
