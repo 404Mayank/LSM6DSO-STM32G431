@@ -1,0 +1,30 @@
+# Build outputs
+build/
+
+# STM32CubeMX
+mx.scratch
+.mxproject
+
+# IDE / Editor
+.vscode/
+.settings/
+.clangd
+*.swp
+*.swo
+*~
+
+# Compiled objects
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Clangd cache
+.cache/
