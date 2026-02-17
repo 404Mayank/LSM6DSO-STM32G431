@@ -85,6 +85,12 @@ typedef enum {
     IMU_GY_LPF1_XTREME      = 7,
 } IMU_GY_LPF1_BW_t;
 
+/* ---------- FIFO operating mode ------------------------------------------ */
+typedef enum {
+    IMU_FIFO_BYPASS = 0,              /* FIFO disabled                    */
+    IMU_FIFO_STREAM = 1,              /* Continuous: oldest overwritten   */
+} IMU_FIFO_Mode_t;
+
 /* Include user configuration (needs the enums above) */
 #include "IMU_LSM6DSO_conf.h"
 
@@ -103,6 +109,9 @@ typedef struct {
     uint8_t            gy_lpf1_en;    /* Enable GY LPF1                    */
     IMU_GY_LPF1_BW_t  gy_lpf1_bw;    /* GY LPF1 bandwidth                 */
     uint8_t            read_temp;     /* Read temperature on every update   */
+    IMU_FIFO_Mode_t    fifo_mode;     /* FIFO operating mode               */
+    IMU_ODR_t          fifo_gy_bdr;   /* Gyro FIFO batch data rate         */
+    IMU_ODR_t          fifo_xl_bdr;   /* Accel FIFO batch data rate        */
 } IMU_Config_t;
 
 /**
@@ -128,6 +137,9 @@ typedef struct {
     .gy_lpf1_en = IMU_GY_LPF1_ENABLE,              \
     .gy_lpf1_bw = IMU_DEFAULT_GY_LPF1_BW,          \
     .read_temp  = IMU_READ_TEMPERATURE,             \
+    .fifo_mode  = IMU_DEFAULT_FIFO_MODE,            \
+    .fifo_gy_bdr = IMU_DEFAULT_FIFO_GY_BDR,         \
+    .fifo_xl_bdr = IMU_DEFAULT_FIFO_XL_BDR,         \
 }
 
 /* ---------- Sensor data -------------------------------------------------- */
@@ -152,6 +164,9 @@ typedef struct {
     IMU_ODR_t          xl_odr;
     IMU_ODR_t          gy_odr;
     uint8_t            read_temp;
+    IMU_FIFO_Mode_t    fifo_mode;
+    IMU_ODR_t          fifo_gy_bdr;
+    uint16_t           last_fifo_count; /* Samples returned by last FIFO read */
     IMU_Data_t         data;          /* Latest reading                    */
     uint8_t            initialized;
 } IMU_Handle_t;
@@ -191,6 +206,36 @@ IMU_Status_t IMU_Sleep(IMU_Handle_t *h);
  * @brief  Re-enable both sensors at previously configured ODR.
  */
 IMU_Status_t IMU_Wake(IMU_Handle_t *h);
+
+/* ---------- FIFO API ----------------------------------------------------- */
+
+/**
+ * @brief  Drain the FIFO of gyro-Z samples and convert to mdps.
+ *
+ * Reads up to `max_samples` FIFO words.  Only gyro-tagged words are
+ * converted; other tags (if any) are consumed but discarded.
+ * The result count is also stored in h->last_fifo_count for later query.
+ *
+ * @param  h            Initialised handle (FIFO must be in STREAM mode)
+ * @param  buf          Caller-provided output buffer (float mdps values)
+ * @param  max_samples  Maximum entries to read (size of buf).
+ *                      Clamped internally to IMU_FIFO_MAX_READ.
+ * @retval Number of valid gyro-Z samples written to buf,
+ *         or negative IMU_Status_t on bus error.
+ */
+int32_t IMU_FIFO_ReadGyroZ(IMU_Handle_t *h, float *buf, uint16_t max_samples);
+
+/**
+ * @brief  Flush the FIFO by cycling to BYPASS mode and back.
+ *         Use before starting integration to discard stale data.
+ */
+IMU_Status_t IMU_FIFO_Flush(IMU_Handle_t *h);
+
+/**
+ * @brief  Get the number of gyro-Z samples returned by the last
+ *         IMU_FIFO_ReadGyroZ() call.  Useful for diagnostics / display.
+ */
+uint16_t IMU_FIFO_GetLastBatchCount(const IMU_Handle_t *h);
 
 #ifdef __cplusplus
 }

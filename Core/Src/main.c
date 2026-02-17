@@ -64,6 +64,9 @@ static uint32_t disp_last = 0;
 static volatile uint32_t tim6_counter = 0;
 static volatile uint8_t sensor_tick = 0;
 
+/* FIFO read buffer — at 1667 Hz ODR / 1000 Hz loop, expect 1–2 samples/tick */
+static float gz_fifo_buf[IMU_FIFO_MAX_READ];
+
 IMU_Handle_t imu;
 YawEst_Handle_t yaw_est;
 /* USER CODE END PV */
@@ -156,17 +159,26 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    // 1kHz sensor loop — ISR sets flag, main loop services it
+    // 1kHz sensor loop — ISR sets flag, main loop drains FIFO
     if (sensor_tick) {
       sensor_tick = 0;
-      IMU_Update(&imu, NULL);
-      YawEst_Update(&yaw_est, imu.data.gyro_z_mdps);
+
+      /* Drain all gyro samples from FIFO and integrate each one.
+       * dt is derived from the crystal-locked 1 kHz timer tick rather than
+       * the nominal ODR, eliminating IMU clock error from the integral. */
+      int32_t n = IMU_FIFO_ReadGyroZ(&imu, gz_fifo_buf, IMU_FIFO_MAX_READ);
+      if (n > 0) {
+          float dt = 0.001f / (float)n;
+          for (int32_t i = 0; i < n; i++)
+              YawEst_Update(&yaw_est, gz_fifo_buf[i], dt);
+      }
     }
 
     // ~30Hz display loop
     uint32_t now = HAL_GetTick();
     if (now - disp_last >= 33) {
       float yaw = YawEst_GetYaw(&yaw_est);
+      uint16_t batch = IMU_FIFO_GetLastBatchCount(&imu);
       char buf[32];
 
       // Debug: 1khz timer count and effective loop frequency
@@ -179,12 +191,17 @@ int main(void)
       /* OLED Update */
       ssd1306_Fill(Black);
       ssd1306_SetCursor(0, 0);
-      sprintf(buf, "Yaw:%7.2f", yaw);
+      sprintf(buf, "Yaw:%8.4f", yaw);
       ssd1306_WriteString(buf, Font_7x10, White);
-      ssd1306_SetCursor(0, 11);
-      ssd1306_WriteString("mdps:", Font_7x10, White);
-      sprintf(buf, "%7.2f", imu.data.gyro_z_mdps);
-      ssd1306_WriteString(buf, Font_7x10, White);
+      ssd1306_SetCursor(0, 14);
+      sprintf(buf, "gz:%7.1f mdps", imu.data.gyro_z_mdps);
+      ssd1306_WriteString(buf, Font_6x8, White);
+      ssd1306_SetCursor(0, 24);
+      sprintf(buf, "iir:%7.1f mdps", YawEst_GetIIRState(&yaw_est));
+      ssd1306_WriteString(buf, Font_6x8, White);
+      ssd1306_SetCursor(0, 34);
+      sprintf(buf, "batch:%u", batch);
+      ssd1306_WriteString(buf, Font_6x8, White);
 
 
       // Debug: show effective loop frequency (should be ~1000 Hz)
@@ -259,6 +276,9 @@ void SystemClock_Config(void)
       printf("[Cal] Gyro-Z calibration — keep still!\n");
       YawEst_CalibrateReset(&yaw_est);
 
+      /* Flush stale FIFO data before calibration */
+      IMU_FIFO_Flush(&imu);
+
       ssd1306_Fill(Black);
       ssd1306_SetCursor(10, 0);
       ssd1306_WriteString("GYRO CAL", Font_7x10, White);
@@ -274,12 +294,12 @@ void SystemClock_Config(void)
           while (!sensor_tick) { /* spin */ }
           sensor_tick = 0;
 
-          int32_t ret = IMU_Update(&imu, NULL);
-          if (ret < 0) continue;              /* bus error — retry     */
-          if (!(ret & IMU_DATA_GY)) continue;  /* no new gyro sample   */
-
-          state = YawEst_CalibrateFeed(&yaw_est, imu.data.gyro_z_mdps);
-          sample_count++;
+          /* Drain FIFO and feed each sample to calibration */
+          int32_t n = IMU_FIFO_ReadGyroZ(&imu, gz_fifo_buf, IMU_FIFO_MAX_READ);
+          for (int32_t i = 0; i < n && state != YAWEST_CAL_DONE; i++) {
+              state = YawEst_CalibrateFeed(&yaw_est, gz_fifo_buf[i]);
+              sample_count++;
+          }
 
           /* Progress bar on OLED every 64 samples */
           if ((sample_count & 0x3F) == 0) {
@@ -307,6 +327,10 @@ void SystemClock_Config(void)
       ssd1306_WriteString(buf, Font_6x8, White);
       ssd1306_UpdateScreen();
       HAL_Delay(800);
+
+      /* Flush FIFO again — discard data accumulated during "CAL DONE" display */
+      IMU_FIFO_Flush(&imu);
+
       ssd1306_Fill(Black);
       ssd1306_UpdateScreen();
   }
@@ -317,6 +341,13 @@ void SystemClock_Config(void)
       // Code to execute at 1000Hz
       sensor_tick = 1;
       tim6_counter++;
+    }
+  }
+
+  // EXTI Callback: LSM6DSO INT1 (PB0) — reserved for future DRDY/watermark
+  void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == IMU_INT1_Pin) {
+      /* Future: FIFO watermark or data-ready interrupt handling */
     }
   }
 

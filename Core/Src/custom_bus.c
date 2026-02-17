@@ -270,8 +270,8 @@ __weak HAL_StatusTypeDef MX_SPI1_Init(SPI_HandleTypeDef* hspi)
   hspi->Init.Mode = SPI_MODE_MASTER;
   hspi->Init.Direction = SPI_DIRECTION_2LINES;
   hspi->Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi->Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi->Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi->Init.CLKPolarity = SPI_POLARITY_HIGH;
+  hspi->Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi->Init.NSS = SPI_NSS_SOFT;
   hspi->Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
   hspi->Init.FirstBit = SPI_FIRSTBIT_MSB;
@@ -279,7 +279,7 @@ __weak HAL_StatusTypeDef MX_SPI1_Init(SPI_HandleTypeDef* hspi)
   hspi->Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
   hspi->Init.CRCPolynomial = 7;
   hspi->Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi->Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  hspi->Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
   if (HAL_SPI_Init(hspi) != HAL_OK)
   {
     ret = HAL_ERROR;

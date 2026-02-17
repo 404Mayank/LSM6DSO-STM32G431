@@ -136,10 +136,36 @@
  * IMU_GY_LPF1_AGGRESSIVE    |             |
  * IMU_GY_LPF1_XTREME        | narrowest   | ~most lag
  */
-#define IMU_DEFAULT_GY_LPF1_BW  IMU_GY_LPF1_STRONG
+#define IMU_DEFAULT_GY_LPF1_BW  IMU_GY_LPF1_MEDIUM
 
 /* ========================================================================= */
-/*  5.  DRIVER BEHAVIOUR                                                     */
+/*  5.  FIFO CONFIGURATION                                                   */
+/* ========================================================================= */
+
+/* ---- FIFO operating mode ----
+ * Determines how the sensor's internal 512-word FIFO behaves.
+ *
+ * Option               | Behaviour
+ * ---------------------+--------------------------------------------------
+ * IMU_FIFO_BYPASS      | FIFO disabled, read via status register polling
+ * IMU_FIFO_STREAM      | Continuous — oldest data overwritten when full
+ *                      | *** Use this to never miss a sample ***
+ */
+#define IMU_DEFAULT_FIFO_MODE   IMU_FIFO_STREAM
+
+/* ---- Gyroscope FIFO batch data rate ----
+ * How often gyro samples are pushed into the FIFO.  Should match (or be ≤)
+ * the gyroscope ODR.  Uses the same IMU_ODR_t enum as the ODR settings.
+ * Set to IMU_ODR_OFF to disable gyro batching. */
+#define IMU_DEFAULT_FIFO_GY_BDR IMU_ODR_1667HZ
+
+/* ---- Accelerometer FIFO batch data rate ----
+ * Set to IMU_ODR_OFF to keep the accel out of the FIFO (saves FIFO depth
+ * for gyro-only integration).  Can be enabled if you need FIFO accel too. */
+#define IMU_DEFAULT_FIFO_XL_BDR IMU_ODR_OFF
+
+/* ========================================================================= */
+/*  6.  DRIVER BEHAVIOUR                                                     */
 /* ========================================================================= */
 
 /* Delay in ms after CS goes high before the driver reads WHO_AM_I.
@@ -157,5 +183,11 @@
  * 0 = skip (saves ~6 bytes SPI traffic per update)
  * 1 = read every call */
 #define IMU_READ_TEMPERATURE    0
+
+/* Maximum number of FIFO words IMU_FIFO_ReadGyroZ() will drain per call.
+ * Acts as a safety cap to bound worst-case SPI time in the 1 kHz loop.
+ * At 1667 Hz ODR / 1000 Hz read rate, expect ≤ 2 words per tick.
+ * 8 gives headroom for jitter without runaway reads. */
+#define IMU_FIFO_MAX_READ       8
 
 #endif /* __IMU_LSM6DSO_CONF_H__ */

@@ -96,6 +96,25 @@ static lsm6dso_ftype_t gy_lpf1_bw_to_reg(IMU_GY_LPF1_BW_t bw)
     return (lsm6dso_ftype_t)bw;
 }
 
+static lsm6dso_bdr_gy_t gy_bdr_to_reg(IMU_ODR_t odr)
+{
+    /* BDR enum values match ODR enum values (0 = not batched / off) */
+    return (lsm6dso_bdr_gy_t)odr;
+}
+
+static lsm6dso_bdr_xl_t xl_bdr_to_reg(IMU_ODR_t odr)
+{
+    return (lsm6dso_bdr_xl_t)odr;
+}
+
+static lsm6dso_fifo_mode_t fifo_mode_to_reg(IMU_FIFO_Mode_t m)
+{
+    switch (m) {
+        case IMU_FIFO_STREAM: return LSM6DSO_STREAM_MODE;
+        default:              return LSM6DSO_BYPASS_MODE;
+    }
+}
+
 /* ---- Private: raw → engineering unit conversion ------------------------- */
 
 static float xl_convert(IMU_XL_FS_t fs, int16_t raw)
@@ -136,6 +155,9 @@ IMU_Status_t IMU_Init(IMU_Handle_t *h, const IMU_Config_t *cfg)
     h->xl_odr    = cfg->xl_odr;
     h->gy_odr    = cfg->gy_odr;
     h->read_temp = cfg->read_temp;
+    h->fifo_mode = cfg->fifo_mode;
+    h->fifo_gy_bdr = cfg->fifo_gy_bdr;
+    h->last_fifo_count = 0;
     h->initialized = 0;
     memset(&h->data, 0, sizeof(h->data));
 
@@ -208,6 +230,16 @@ IMU_Status_t IMU_Init(IMU_Handle_t *h, const IMU_Config_t *cfg)
                 gy_lpf1_bw_to_reg(cfg->gy_lpf1_bw)) != 0)
             return IMU_ERR_CFG;
     }
+
+    /* ---- FIFO configuration --------------------------------------------- */
+    if (lsm6dso_fifo_xl_batch_set(&h->ctx, xl_bdr_to_reg(cfg->fifo_xl_bdr)) != 0)
+        return IMU_ERR_CFG;
+    if (lsm6dso_fifo_gy_batch_set(&h->ctx, gy_bdr_to_reg(cfg->fifo_gy_bdr)) != 0)
+        return IMU_ERR_CFG;
+    if (lsm6dso_fifo_temp_batch_set(&h->ctx, LSM6DSO_TEMP_NOT_BATCHED) != 0)
+        return IMU_ERR_CFG;
+    if (lsm6dso_fifo_mode_set(&h->ctx, fifo_mode_to_reg(cfg->fifo_mode)) != 0)
+        return IMU_ERR_CFG;
 
     h->initialized = 1;
     return IMU_OK;
@@ -296,4 +328,79 @@ IMU_Status_t IMU_Wake(IMU_Handle_t *h)
         return IMU_ERR_BUS;
 
     return IMU_OK;
+}
+
+/* ========================================================================= */
+/*                            FIFO API                                       */
+/* ========================================================================= */
+
+int32_t IMU_FIFO_ReadGyroZ(IMU_Handle_t *h, float *buf, uint16_t max_samples)
+{
+    if (!h->initialized)
+        return (int32_t)IMU_ERR_CFG;
+
+    /* Clamp to safety limit */
+    if (max_samples > IMU_FIFO_MAX_READ)
+        max_samples = IMU_FIFO_MAX_READ;
+
+    /* How many words are sitting in the FIFO? */
+    uint16_t fifo_level = 0;
+    if (lsm6dso_fifo_data_level_get(&h->ctx, &fifo_level) != 0)
+        return (int32_t)IMU_ERR_BUS;
+
+    if (fifo_level > max_samples)
+        fifo_level = max_samples;
+
+    int32_t gyro_count = 0;
+    uint8_t raw[6];
+
+    for (uint16_t i = 0; i < fifo_level; i++) {
+        /* Read the tag byte (identifies sensor source) */
+        lsm6dso_fifo_tag_t tag;
+        if (lsm6dso_fifo_sensor_tag_get(&h->ctx, &tag) != 0)
+            return (int32_t)IMU_ERR_BUS;
+
+        /* Read the 6-byte data word (must always be read to advance FIFO) */
+        if (lsm6dso_fifo_out_raw_get(&h->ctx, raw) != 0)
+            return (int32_t)IMU_ERR_BUS;
+
+        if (tag == LSM6DSO_GYRO_NC_TAG) {
+            /* Extract Z-axis (bytes 4–5, little-endian) */
+            int16_t raw_z = (int16_t)((uint16_t)raw[4] | ((uint16_t)raw[5] << 8));
+            float gz_mdps = gy_convert(h->gy_fs, raw_z);
+
+            /* Also update the handle's latest data for all 3 axes */
+            int16_t raw_x = (int16_t)((uint16_t)raw[0] | ((uint16_t)raw[1] << 8));
+            int16_t raw_y = (int16_t)((uint16_t)raw[2] | ((uint16_t)raw[3] << 8));
+            h->data.gyro_x_mdps = gy_convert(h->gy_fs, raw_x);
+            h->data.gyro_y_mdps = gy_convert(h->gy_fs, raw_y);
+            h->data.gyro_z_mdps = gz_mdps;
+
+            buf[gyro_count++] = gz_mdps;
+        }
+        /* Non-gyro tags (XL if batched) are consumed and discarded */
+    }
+
+    h->last_fifo_count = (uint16_t)gyro_count;
+    return gyro_count;
+}
+
+IMU_Status_t IMU_FIFO_Flush(IMU_Handle_t *h)
+{
+    if (!h->initialized)
+        return IMU_ERR_CFG;
+
+    /* Cycle BYPASS → original mode: clears all buffered data instantly */
+    if (lsm6dso_fifo_mode_set(&h->ctx, LSM6DSO_BYPASS_MODE) != 0)
+        return IMU_ERR_BUS;
+    if (lsm6dso_fifo_mode_set(&h->ctx, fifo_mode_to_reg(h->fifo_mode)) != 0)
+        return IMU_ERR_BUS;
+
+    h->last_fifo_count = 0;
+    return IMU_OK;
+}
+
+uint16_t IMU_FIFO_GetLastBatchCount(const IMU_Handle_t *h)
+{
+    return h->last_fifo_count;
 }
