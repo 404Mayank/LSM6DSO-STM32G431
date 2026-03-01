@@ -43,8 +43,9 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 # Add user sources
-file(GLOB SSD1306_SOURCES
-    "${CMAKE_SOURCE_DIR}/Drivers/ssd1306/*.c"
+set(SSD1306_SOURCES
+    ${CMAKE_SOURCE_DIR}/Drivers/ssd1306/ssd1306.c
+    ${CMAKE_SOURCE_DIR}/Drivers/ssd1306/fonts.c
 )
 
 file(GLOB IMU_LSM6DSO_SOURCES

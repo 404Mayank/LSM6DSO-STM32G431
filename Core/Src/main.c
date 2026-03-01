@@ -33,8 +33,7 @@
 #include "lsm6dso_reg.h"
 #include "ssd1306.h"
 #include "math.h"
-#include "ssd1306_fonts.h"
-#include "ssd1306_tests.h"
+#include "fonts.h"
 #include "custom_bus.h"
 #include "IMU_LSM6DSO.h"
 #include "Yaw_Estimator.h"
@@ -122,32 +121,34 @@ int main(void)
 
   // SSD1306 Initialization
   ssd1306_Init();
-  ssd1306_Fill(Black);
+  ssd1306_FlipScreenVertically(); // Flip screen if needed
+  ssd1306_SetColor(Black);
+  ssd1306_Fill();
   ssd1306_UpdateScreen();
   printf("[Debug] OLED Initialized\n");
 
-  // Start Timer Interrupt for 1000Hz updates
-  HAL_TIM_Base_Start_IT(&htim6);
-  printf("[Debug] Timer 6 Started\n");
+    // Start Timer Interrupt for 1000Hz updates
+    HAL_TIM_Base_Start_IT(&htim6);
+    printf("[Debug] Timer 6 Started\n");
 
-  // SPI1 Initialization (BSP layer — no MX_SPI1_Init in CubeMX)
-  BSP_SPI1_Init();
+    // SPI1 Initialization (BSP layer — no MX_SPI1_Init in CubeMX)
+    BSP_SPI1_Init();
 
-  // IMU Initialization
-  IMU_Config_t imu_cfg = IMU_DEFAULT_CONFIG;
-  if (IMU_Init(&imu, &imu_cfg) != IMU_OK) {
+    // IMU Initialization
+    IMU_Config_t imu_cfg = IMU_DEFAULT_CONFIG;
+    if (IMU_Init(&imu, &imu_cfg) != IMU_OK) {
       printf("[Error] IMU init failed\n");
-  } else {
+    } else {
       printf("[Debug] IMU Initialized\n");
-  }
+    }
 
-  // Yaw Estimator Initialization
-  YawEst_Config_t yaw_cfg = YAWEST_DEFAULT_CONFIG;
-  YawEst_Init(&yaw_est, &yaw_cfg);
+    // Yaw Estimator Initialization
+    YawEst_Config_t yaw_cfg = YAWEST_DEFAULT_CONFIG;
+    YawEst_Init(&yaw_est, &yaw_cfg);
 
-  // Gyro-Z bias calibration (keep robot still!)
-  HAL_Delay(2000);
-  Calibrate_GyroZ();
+    // Gyro-Z bias calibration (keep robot still!)
+    HAL_Delay(2000);
+    Calibrate_GyroZ();
 
   /* USER CODE END 2 */
 
@@ -189,26 +190,27 @@ int main(void)
       disp_last = now;
 
       /* OLED Update */
-      ssd1306_Fill(Black);
+      ssd1306_SetColor(Black);
+      ssd1306_Fill();
+      ssd1306_SetColor(White);
       ssd1306_SetCursor(0, 0);
       sprintf(buf, "Yaw:%8.4f", yaw);
-      ssd1306_WriteString(buf, Font_7x10, White);
+      ssd1306_WriteString(buf, Font_7x10);
       ssd1306_SetCursor(0, 14);
       sprintf(buf, "gz:%7.1f mdps", imu.data.gyro_z_mdps);
-      ssd1306_WriteString(buf, Font_6x8, White);
+      ssd1306_WriteString(buf, Font_7x10);
       ssd1306_SetCursor(0, 24);
       sprintf(buf, "iir:%7.1f mdps", YawEst_GetIIRState(&yaw_est));
-      ssd1306_WriteString(buf, Font_6x8, White);
+      ssd1306_WriteString(buf, Font_7x10);
       ssd1306_SetCursor(0, 34);
       sprintf(buf, "batch:%u", batch);
-      ssd1306_WriteString(buf, Font_6x8, White);
-
+      ssd1306_WriteString(buf, Font_7x10);
 
       // Debug: show effective loop frequency (should be ~1000 Hz)
-      ssd1306_SetCursor(86, 56);
-      ssd1306_WriteString("Hz:", Font_6x8, White);
+      ssd1306_SetCursor(72, 54);
+      ssd1306_WriteString((char *)"Hz:", Font_7x10);
       sprintf(buf, "%d", (int)hz);
-      ssd1306_WriteString(buf, Font_6x8, White);
+      ssd1306_WriteString(buf, Font_7x10);
       ssd1306_UpdateScreen();
     }
 
@@ -279,11 +281,13 @@ void SystemClock_Config(void)
       /* Flush stale FIFO data before calibration */
       IMU_FIFO_Flush(&imu);
 
-      ssd1306_Fill(Black);
+      ssd1306_SetColor(Black);
+      ssd1306_Fill();
+      ssd1306_SetColor(White);
       ssd1306_SetCursor(10, 0);
-      ssd1306_WriteString("GYRO CAL", Font_7x10, White);
+      ssd1306_WriteString((char *)"GYRO CAL", Font_7x10);
       ssd1306_SetCursor(4, 14);
-      ssd1306_WriteString("Keep still!", Font_6x8, White);
+      ssd1306_WriteString((char *)"Keep still!", Font_7x10);
       ssd1306_UpdateScreen();
 
       YawEst_CalState_t state = YAWEST_CAL_STABILIZING;
@@ -306,11 +310,12 @@ void SystemClock_Config(void)
               uint8_t pct = YawEst_GetCalProgress(&yaw_est);
               ssd1306_SetCursor(4, 30);
               sprintf(buf, "Progress: %3u%%", pct);
-              ssd1306_WriteString(buf, Font_6x8, White);
+              ssd1306_SetColor(White);
+              ssd1306_WriteString(buf, Font_7x10);
               /* filled bar: 120 px wide max */
               for (uint8_t x = 4; x < 4 + (pct * 120U) / 100U; x++) {
                   for (uint8_t y = 42; y < 48; y++)
-                      ssd1306_DrawPixel(x, y, White);
+                      ssd1306_DrawPixel(x, y);
               }
               ssd1306_UpdateScreen();
           }
@@ -319,19 +324,22 @@ void SystemClock_Config(void)
       float bias = YawEst_GetBias(&yaw_est);
       printf("[Cal] Bias = %.2f mdps\n", bias);
 
-      ssd1306_Fill(Black);
+      ssd1306_SetColor(Black);
+      ssd1306_Fill();
+      ssd1306_SetColor(White);
       ssd1306_SetCursor(10, 0);
-      ssd1306_WriteString("CAL DONE", Font_7x10, White);
+      ssd1306_WriteString((char *)"CAL DONE", Font_7x10);
       ssd1306_SetCursor(4, 14);
       sprintf(buf, "Bias:%.1f mdps", bias);
-      ssd1306_WriteString(buf, Font_6x8, White);
+      ssd1306_WriteString(buf, Font_7x10);
       ssd1306_UpdateScreen();
       HAL_Delay(800);
 
       /* Flush FIFO again — discard data accumulated during "CAL DONE" display */
       IMU_FIFO_Flush(&imu);
 
-      ssd1306_Fill(Black);
+      ssd1306_SetColor(Black);
+      ssd1306_Fill();
       ssd1306_UpdateScreen();
   }
 
